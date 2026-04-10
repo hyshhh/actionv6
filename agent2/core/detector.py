@@ -30,7 +30,7 @@ class PersonDetector:
         model_path: str = "yolov8n.pt",
         confidence: float = 0.5,
         device: str = "cpu",
-        class_id: int = 0,
+        class_ids: list[int] | int = 0,
         detect_width: int = 0,
         detect_height: int = 0,
         tracker_enabled: bool = True,
@@ -47,7 +47,7 @@ class PersonDetector:
             model_path: YOLOv8 模型路径（首次运行自动下载）
             confidence: 最低置信度阈值
             device: 推理设备 ("cpu" / "cuda:0")
-            class_id: COCO 数据集中 person 类的 ID（0）
+            class_ids: 要检测的类别 ID 列表（如 [0,1,2]）或单个 int，会统一当作"人"处理
             detect_width: 检测推理宽度（0=保持原始分辨率）
             detect_height: 检测推理高度（0=保持原始分辨率）
             tracker_enabled: 是否启用目标跟踪
@@ -61,7 +61,8 @@ class PersonDetector:
         """
         self.confidence = confidence
         self.device = device
-        self.class_id = class_id
+        # 统一为列表，支持多个类别 ID 都当作"人"
+        self.class_ids = [class_ids] if isinstance(class_ids, int) else list(class_ids)
         self.nms_iou = nms_iou
         self.detect_width = detect_width
         self.detect_height = detect_height
@@ -167,7 +168,7 @@ model: auto
             results = self.model.track(
                 infer_frame,
                 device=self.device,
-                classes=[self.class_id],
+                classes=self.class_ids,
                 conf=self.confidence,
                 iou=self.nms_iou,          # NMS IoU 阈值，从配置读取
                 max_det=50,            # 限制最大检测数，仓库场景不会超过50人
@@ -179,7 +180,7 @@ model: auto
             results = self.model(
                 infer_frame,
                 device=self.device,
-                classes=[self.class_id],
+                classes=self.class_ids,
                 conf=self.confidence,
                 iou=self.nms_iou,          # NMS IoU 阈值，从配置读取
                 max_det=50,

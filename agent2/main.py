@@ -81,7 +81,7 @@ def build_pipeline(args: argparse.Namespace, config: dict) -> Pipeline:
         model_path=det_cfg.get("model", "yolov8n.pt"),
         confidence=det_cfg.get("confidence", 0.5),
         device=det_cfg.get("device", "cpu"),
-        class_id=det_cfg.get("class_id", 0),
+        class_ids=det_cfg.get("class_ids", det_cfg.get("class_id", 0)),
         detect_width=det_cfg.get("detect_width", 0),
         detect_height=det_cfg.get("detect_height", 0),
         tracker_enabled=trk_cfg.get("enabled", True),

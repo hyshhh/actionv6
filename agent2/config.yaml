@@ -20,28 +20,29 @@ qwen:
 local_model:
   api_key: "abc123"              # vllm serve 启动时设置的 --api-key（无鉴权则留空）
   api_url: "http://localhost:7890/v1"  # vLLM OpenAI 兼容接口地址
-  model: "Qwen/Qwen3-VL-4B-Instruct"  # --served-model-name 设置的模型名
+  model: "Qwen/Qwen3-VL-4B-AWQ"  # --served-model-name 设置的模型名
   max_tokens: 128
   temperature: 0.1
   timeout: 60                    # 本地推理可能更慢，给长一点
 
 # 人体检测器配置
 detector:
-  model: "yolov8n.pt"            # YOLOv8 模型文件（自动下载）
-  confidence: 0.3                # 检测置信度阈值
+  model: "yolo11n.pt"            # YOLO 模型文件（自动下载）
+  confidence: 0.1                # 检测置信度阈值
   device: "cuda:0"               # 推理设备: cpu 或 cuda:0
-  class_id: 0                    # COCO 中 person 类的 ID
+  class_ids: [0, 1, 2]           # 要检测的类别 ID 列表，全部当作"人"处理
+                                  # 单个值也支持，如: 0（兼容旧配置的 class_id）
   detect_width: 640              # 检测推理宽度（0=保持原始分辨率）
   detect_height: 640             # 检测推理高度（0=保持原始分辨率）
   nms_iou: 0.1                   # NMS IoU 阈值（越小越严格，合并更多重叠框）
 
 # 目标跟踪配置（ByteTrack）
 tracker:
-  enabled: true                  # 是否启用目标跟踪
+  enabled: false                  # 是否启用目标跟踪
   tracker_type: "bytetrack"      # 跟踪器类型: bytetrack / botsort
   track_high_thresh: 0.6         # 高置信度跟踪阈值
   track_low_thresh: 0.3          # 低置信度跟踪阈值（ByteTrack 二次匹配）
-  match_thresh: 0.05             # 匹配阈值
+  match_thresh: 0.8              # 匹配阈值
   track_buffer: 30               # 跟踪丢失后保留帧数（ID保持时间）
   with_reid: false               # BoT-SORT 是否启用 ReID 外观特征（需要额外下载模型）
 
