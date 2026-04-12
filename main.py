@@ -108,6 +108,7 @@ def build_pipeline(args: argparse.Namespace, config: dict) -> Pipeline:
     # ---- 行为分类器 ----
     behavior_classes = config.get("behavior_classes", None)
     model_mode = args.model_mode or config.get("model_mode", "api")
+    prompt_mode = config.get("prompt_mode", "detailed")
     
     if model_mode == "local":
         lm_cfg = config.get("local_model", {})
@@ -120,6 +121,7 @@ def build_pipeline(args: argparse.Namespace, config: dict) -> Pipeline:
             timeout=lm_cfg.get("timeout", 60),
             behavior_classes=behavior_classes,
             model_mode="local",
+            prompt_mode=prompt_mode,
         )
     else:
         qw_cfg = config.get("qwen", {})
@@ -132,6 +134,7 @@ def build_pipeline(args: argparse.Namespace, config: dict) -> Pipeline:
             timeout=qw_cfg.get("timeout", 30),
             behavior_classes=behavior_classes,
             model_mode="api",
+            prompt_mode=prompt_mode,
         )
 
     # ---- 流水线 ----

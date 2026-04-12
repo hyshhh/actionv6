@@ -6,6 +6,7 @@ import json
 import os
 import re
 import time
+from pathlib import Path
 from typing import Optional
 
 from openai import OpenAI
@@ -14,6 +15,9 @@ from models.schemas import BehaviorResult, Severity
 from utils.logger import get_logger
 
 logger = get_logger()
+
+# 提示词模板文件目录（相对于项目根目录）
+_PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
 
 class BehaviorClassifier:
@@ -46,6 +50,7 @@ class BehaviorClassifier:
         timeout: int = 30,
         behavior_classes: list[dict] | None = None,
         model_mode: str = "api",
+        prompt_mode: str = "detailed",
     ):
         """
         Args:
@@ -57,8 +62,10 @@ class BehaviorClassifier:
             timeout: 请求超时（秒）
             behavior_classes: 行为类别配置列表
             model_mode: "api"（云端）或 "local"（本地 vLLM）
+            prompt_mode: "detailed"（详细提示词）或 "brief"（简练提示词）
         """
         self.model_mode = model_mode
+        self.prompt_mode = prompt_mode
         self.api_key = api_key or os.environ.get("QWEN_API_KEY", "")
         self.api_url = api_url
         self.model = model
@@ -139,7 +146,7 @@ class BehaviorClassifier:
         ]
 
     def _build_prompt(self):
-        """构建系统提示词和行为类别描述"""
+        """从外部模板文件构建系统提示词"""
         categories_text = ""
         for cls in self.behavior_classes:
             categories_text += (
@@ -150,26 +157,34 @@ class BehaviorClassifier:
 
         valid_ids = [cls["id"] for cls in self.behavior_classes]
 
-        self.system_prompt = (
-            "你是一个专业的救生行为分析AI。你的任务是"
-            "识别画面中人物的行为。\n\n"
-            "## 可识别的行为类别\n"
-            f"{categories_text}\n"
-            "## 输出要求\n"
-            "请严格按以下 JSON 格式输出，不要包含其他内容：\n"
-            "```json\n"
-            "{\n"
-            ' "behavior_id": "<行为ID>",\n'
-            ' "behavior_label": "<行为中文标签>",\n'
-            ' "description": "<详细行为描述>",\n'
-            ' "severity": "<严重等级: critical/warning/normal>",\n'
-            ' "confidence": <0.0-1.0的置信度>\n'
-            "}\n"
-            "```\n\n"
-            f"behavior_id 必须是以下之一: {valid_ids}\n"
-            "如果无法确定行为，返回 unknown。\n"
-            "请基于图像内容客观分析，不要臆测。"
+        # 根据 prompt_mode 选择模板文件
+        template_filename = f"{self.prompt_mode}_prompt.txt"
+        template_path = _PROMPTS_DIR / template_filename
+
+        if not template_path.exists():
+            logger.warning(f"提示词模板文件不存在: {template_path}, 回退到详细版")
+            template_path = _PROMPTS_DIR / "detailed_prompt.txt"
+
+        if not template_path.exists():
+            # 兜底：模板文件全部丢失时使用内置默认提示词
+            logger.error("所有提示词模板文件缺失，使用内置默认提示词")
+            self.system_prompt = (
+                "你是一个专业的救生行为分析AI。你的任务是识别画面中人物的行为。\n\n"
+                "## 可识别的行为类别\n"
+                f"{categories_text}\n"
+                "## 输出要求\n"
+                "请严格按 JSON 格式输出 behavior_id、behavior_label、description、severity、confidence。\n"
+                f"behavior_id 必须是以下之一: {valid_ids}\n"
+                "如果无法确定行为，返回 unknown。"
+            )
+            return
+
+        template = template_path.read_text(encoding="utf-8")
+        self.system_prompt = template.format(
+            categories_text=categories_text,
+            valid_ids=valid_ids,
         )
+        logger.info(f"已加载提示词模板: {template_filename}")
 
     def classify(
         self,

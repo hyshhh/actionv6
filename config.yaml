@@ -7,6 +7,11 @@
 # "local" → 调用本地 vLLM 部署的模型
 model_mode: "local"
 
+# ---------- 提示词模式 ----------
+# "detailed" → 详细版提示词（更多特征描述，效果更好，token 消耗更高）
+# "brief"    → 简练版提示词（轻量运行，token 消耗更低）
+prompt_mode: "detailed"
+
 # 千问云端 API 配置（model_mode = "api" 时生效）
 qwen:
   api_key: ""                    # 也可通过环境变量 QWEN_API_KEY 设置
