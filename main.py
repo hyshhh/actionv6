@@ -92,6 +92,8 @@ def build_pipeline(args: argparse.Namespace, config: dict) -> Pipeline:
         track_buffer=trk_cfg.get("track_buffer", 30),
         nms_iou=det_cfg.get("nms_iou", 0.5),
         with_reid=trk_cfg.get("with_reid", False),
+        # 功能1：YOLO 隔帧推理
+        yolo_skip_frames=det_cfg.get("yolo_skip_frames", 0),
     )
 
     # ---- 关键帧提取器 ----
@@ -109,7 +111,7 @@ def build_pipeline(args: argparse.Namespace, config: dict) -> Pipeline:
     behavior_classes = config.get("behavior_classes", None)
     model_mode = args.model_mode or config.get("model_mode", "api")
     prompt_mode = config.get("prompt_mode", "detailed")
-    
+
     if model_mode == "local":
         lm_cfg = config.get("local_model", {})
         classifier = BehaviorClassifier(
@@ -152,15 +154,21 @@ def build_pipeline(args: argparse.Namespace, config: dict) -> Pipeline:
         buffer_size=pp_cfg.get("buffer_size", 5),
         camera_interval=pp_cfg.get("camera_interval", 0.1),
         alert_cooldown=pp_cfg.get("alert_cooldown", 30),
-        sustained_detection_frames=pp_cfg.get("sustained_detection_frames", 1),  # 需求3
-        max_concurrent=pp_cfg.get("max_concurrent", 1),  # 最大并发 API 请求数
+        sustained_detection_frames=pp_cfg.get("sustained_detection_frames", 1),
+        max_concurrent=pp_cfg.get("max_concurrent", 1),
+        # 功能2：外层并发模式
+        concurrent_mode=pp_cfg.get("concurrent_mode", False),
+        max_queued_frames=pp_cfg.get("max_queued_frames", 50),
         output_dir=output_dir,
         save_annotated=out_cfg.get("save_annotated", True),
         save_crops=out_cfg.get("save_crops", True),
         save_report=out_cfg.get("save_report", True),
         display=pp_cfg.get("display", True),
         display_scale=pp_cfg.get("display_scale", 0.5),
-        # 需求2：摄像头日志配置
+        # 功能4：显示控制
+        display_input=pp_cfg.get("display_input", False),
+        display_output=pp_cfg.get("display_output", True),
+        # 摄像头日志
         camera_log_enabled=config.get("camera_log", {}).get("enabled", True),
         camera_log_retention_hours=config.get("camera_log", {}).get("retention_hours", 2.0),
         camera_log_filename=config.get("camera_log", {}).get("log_filename", "camera_behavior_log.json"),
@@ -278,7 +286,21 @@ def parse_args() -> argparse.Namespace:
         "--max-concurrent",
         type=int,
         default=None,
-        help="最大并发 API 请求数 (默认: 读取 config.yaml 中的 max_concurrent)",
+        help="最大并发 API 请求数",
+    )
+
+    # 功能2：命令行开关并发模式
+    parser.add_argument(
+        "--concurrent",
+        action="store_true",
+        help="启用外层并发模式（功能2）",
+    )
+
+    # 功能4：命令行控制显示
+    parser.add_argument(
+        "--show-input",
+        action="store_true",
+        help="同时显示输入源画面（功能4）",
     )
 
     parser.add_argument(
@@ -308,6 +330,12 @@ def main():
         config.setdefault("pipeline", {})["display_scale"] = args.display_scale
     if args.max_concurrent is not None:
         config.setdefault("pipeline", {})["max_concurrent"] = max(1, args.max_concurrent)
+    # 功能2：命令行启用并发模式
+    if args.concurrent:
+        config.setdefault("pipeline", {})["concurrent_mode"] = True
+    # 功能4：命令行显示输入
+    if args.show_input:
+        config.setdefault("pipeline", {})["display_input"] = True
 
     # 设置 API Key（命令行优先，其次环境变量）
     if args.api_key:

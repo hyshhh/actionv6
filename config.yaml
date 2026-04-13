@@ -40,6 +40,7 @@ detector:
   detect_width: 640              # 检测推理宽度（0=保持原始分辨率）
   detect_height: 640             # 检测推理高度（0=保持原始分辨率）
   nms_iou: 0.1                   # NMS IoU 阈值（越小越严格，合并更多重叠框）
+  yolo_skip_frames: 0            # YOLO隔帧推理间隔。0=每帧推理，N=每N帧推理一次（节省资源）
 
 # 目标跟踪配置（ByteTrack）
 tracker:
@@ -127,12 +128,18 @@ pipeline:
   buffer_size: 1                 # 历史帧缓冲区大小（仅追踪模式生效，控制 temporal 范围）
   max_concurrent: 5              # 最大并发 API 请求数（1=串行，≥2=启用并发线程池）
   alert_cooldown: 5              # 同一行为告警冷却时间（秒）
-  display: true                  # 是否显示实时画面（需要 GUI）、视频窗口缩放比例
+  display: true                  # 是否显示实时画面（需要 GUI）
   display_scale: 0.1             # 视频窗口缩放比例
   camera_interval: 0.1           # 摄像头调用间隔（秒）
-  sustained_detection_frames: 1  # 连续N帧检测到目标才触发API调用（需求3）
+  sustained_detection_frames: 1  # 连续N帧检测到目标才触发API调用
+  concurrent_mode: false         # 是否启用外层并发模式（功能2）
+                                 # false=级联模式（等Qwen出结果再继续）
+                                 # true=并发模式（YOLO不等Qwen，结果异步出队按时间戳打印）
+  max_queued_frames: 50          # 并发模式下最大队列帧数（防止内存溢出）
+  display_input: false           # 是否显示输入源（摄像头时可选择）（功能4）
+  display_output: true           # 是否显示输出画面（标注后的帧）（功能4）
 
-# 摄像头日志配置（需求2）
+# 摄像头日志配置
 camera_log:
   enabled: true                  # 是否启用摄像头行为日志
   retention_hours: 2.0           # 日志保留时长（小时），超过自动删除
