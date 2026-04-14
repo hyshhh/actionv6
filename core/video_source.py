@@ -136,6 +136,7 @@ class VideoSource:
         # 释放旧资源
         if self._cap is not None:
             self._cap.release()
+            self._cap = None
 
         time.sleep(self.reconnect_delay)
 
@@ -155,6 +156,7 @@ class VideoSource:
             return True
         else:
             logger.error("重连失败")
+            self._cap = None
             return False
 
     def read(self) -> tuple[bool, Optional[np.ndarray]]:
@@ -186,8 +188,10 @@ class VideoSource:
         # 摄像头/RTSP: 检查是否需要重连
         if self._consecutive_failures >= self.reconnect_threshold:
             logger.warning(f"连续 {self._consecutive_failures} 帧读取失败，尝试重连...")
-            if self._reconnect():
-                return self.read()  # 重连成功后重试
+            self._reconnect()
+            # 重连后返回 False，由 frames() 循环继续重试
+
+        return False, None
 
         return False, None
 

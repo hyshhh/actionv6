@@ -271,14 +271,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--camera-interval",
         type=float,
-        default=0.1,
+        default=None,
         help="摄像头调用间隔（秒）",
     )
 
     parser.add_argument(
         "--display-scale",
         type=float,
-        default=0.5,
+        default=None,
         help="视频窗口缩放比例",
     )
 

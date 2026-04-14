@@ -172,12 +172,17 @@ class QwenFpsTracker:
         # 滑动窗口：记录每次完成的时间戳
         self._window_seconds = window_seconds
         self._completion_timestamps: list[float] = []
+        # 延迟统计窗口上限
+        self._latency_window_max: int = 200
 
     def record(self, elapsed: float):
         now = time.time()
         self._inference_times.append(elapsed)
         self._total_count += 1
         self._completion_timestamps.append(now)
+        # 滑动窗口裁剪：防止无限增长
+        if len(self._inference_times) > self._latency_window_max:
+            self._inference_times = self._inference_times[self._latency_window_max // 2:]
 
     def _cleanup_window(self):
         """清理窗口外的旧记录"""
@@ -209,6 +214,7 @@ class QwenFpsTracker:
                 "avg_ms": 0.0, "count": 0,
                 "min_ms": 0.0, "max_ms": 0.0,
             }
+        # 延迟统计：取最近 50 次
         window = self._inference_times[-50:]
         times_ms = [t * 1000 for t in window]
         avg_ms = sum(times_ms) / len(times_ms)
@@ -263,6 +269,66 @@ class FrameRateTracker:
         return {
             "frame_rate": round(self.frame_rate, 1),
             "count": len(self._timestamps),
+        }
+
+
+class BitrateTracker:
+    """
+    视频码流速度统计。
+
+    统计原始帧数据吞吐量 (MB/s)：
+    每秒从视频源读取了多少 MB 的原始 BGR 帧数据。
+    使用滑动窗口平滑统计。
+    """
+
+    def __init__(self, window_seconds: float = 10.0):
+        self._window_seconds = window_seconds
+        self._records: list[tuple[float, int]] = []  # [(timestamp, frame_bytes), ...]
+        self._total_bytes: int = 0
+
+    def record(self, frame: np.ndarray):
+        """每读取一帧调用一次"""
+        now = time.time()
+        nbytes = frame.nbytes
+        self._records.append((now, nbytes))
+        self._total_bytes += nbytes
+
+    def _cleanup(self):
+        if not self._records:
+            return
+        cutoff = time.time() - self._window_seconds
+        idx = 0
+        while idx < len(self._records) and self._records[idx][0] < cutoff:
+            idx += 1
+        if idx > 0:
+            self._records = self._records[idx:]
+
+    @property
+    def mbps(self) -> float:
+        """滑动窗口内数据吞吐量 (MB/s)"""
+        self._cleanup()
+        if len(self._records) < 2:
+            return 0.0
+        total_bytes = sum(b for _, b in self._records)
+        span = self._records[-1][0] - self._records[0][0]
+        if span <= 0:
+            return 0.0
+        return total_bytes / span / 1_048_576  # bytes/s → MB/s
+
+    def get_stats(self) -> dict:
+        self._cleanup()
+        frame_count = len(self._records)
+        if frame_count < 2:
+            return {"mbps": 0.0, "frames": frame_count, "total_mb": round(self._total_bytes / 1_048_576, 2)}
+        total_bytes = sum(b for _, b in self._records)
+        span = self._records[-1][0] - self._records[0][0]
+        mbps = round(total_bytes / span / 1_048_576, 2) if span > 0 else 0.0
+        avg_bytes = total_bytes / frame_count
+        return {
+            "mbps": mbps,
+            "frames": frame_count,
+            "avg_frame_kb": round(avg_bytes / 1024, 1),
+            "total_mb": round(self._total_bytes / 1_048_576, 2),
         }
 
 
@@ -425,6 +491,9 @@ class Pipeline:
         # 画面帧处理速率统计
         self._yolo_frame_rate = FrameRateTracker()
 
+        # 码流速度统计
+        self._bitrate_tracker = BitrateTracker()
+
         # 创建输出目录
         os.makedirs(output_dir, exist_ok=True)
         if save_crops:
@@ -569,6 +638,9 @@ class Pipeline:
 
                 self._frame_count += 1
                 self._report.total_frames = self._frame_count
+
+                # 记录码流数据
+                self._bitrate_tracker.record(frame)
 
                 # Step 1: 人体检测（含隔帧推理）
                 detections = self.detector.detect(frame, self._frame_count)
@@ -799,18 +871,10 @@ class Pipeline:
             return results
 
         # 并发模式
-        semaphore = threading.Semaphore(self.max_concurrent)
         futures_map = {}
 
-        def _call_with_semaphore(keyframes: list[str]) -> BehaviorResult:
-            semaphore.acquire()
-            try:
-                return self.classifier.classify(keyframes)
-            finally:
-                semaphore.release()
-
         for idx, (person_key, keyframes_b64) in enumerate(tasks):
-            future = self._classify_executor.submit(_call_with_semaphore, keyframes_b64)
+            future = self._classify_executor.submit(self.classifier.classify, keyframes_b64)
             futures_map[future] = (idx, person_key)
 
         indexed_results: dict[int, tuple[int, BehaviorResult]] = {}
@@ -1147,9 +1211,11 @@ class Pipeline:
         yolo_stats = self.detector.get_fps_stats()
         yolo_fr = self._yolo_frame_rate.get_stats()
         qwen_stats = self._qwen_fps_tracker.get_stats()
+        stream_stats = self._bitrate_tracker.get_stats()
         fps_text = (
             f"YOLO: {yolo_fr['frame_rate']:.1f} frames/s | "
             f"infer {yolo_stats['avg_ms']:.1f}ms | "
+            f"Stream: {stream_stats['mbps']:.1f} MB/s | "
             f"Qwen: {qwen_stats['throughput']:.2f} req/s "
             f"(avg {qwen_stats['avg_ms']:.0f}ms)"
         )
@@ -1176,14 +1242,17 @@ class Pipeline:
     # ==================================================================
 
     def _print_fps_stats(self):
-        """功能3：在终端和日志中打印 YOLO 和 Qwen 实际处理速度"""
+        """功能3：在终端和日志中打印 YOLO、Qwen、码流速度"""
         yolo_stats = self.detector.get_fps_stats()
         yolo_fr = self._yolo_frame_rate.get_stats()
         qwen_stats = self._qwen_fps_tracker.get_stats()
+        stream_stats = self._bitrate_tracker.get_stats()
 
         fps_line = (
             f"[Speed] YOLO: {yolo_fr['frame_rate']:6.1f} frames/s "
-            f"(infer {yolo_stats['avg_ms']:6.1f}ms) | "
+            f"(infer {yolo_stats['avg_ms']:6.1f}ms, "
+            f"min={yolo_stats['min_ms']:.1f} max={yolo_stats['max_ms']:.1f}ms) | "
+            f"Stream: {stream_stats['mbps']:7.2f} MB/s | "
             f"Qwen: {qwen_stats['throughput']:6.2f} req/s "
             f"(avg {qwen_stats['avg_ms']:6.1f}ms, count={qwen_stats['count']})"
         )
@@ -1345,6 +1414,7 @@ class Pipeline:
         yolo_stats = self.detector.get_fps_stats()
         yolo_fr = self._yolo_frame_rate.get_stats()
         qwen_stats = self._qwen_fps_tracker.get_stats()
+        stream_stats = self._bitrate_tracker.get_stats()
 
         logger.info("=" * 60)
         logger.info("分析完成! 摘要:")
@@ -1356,7 +1426,8 @@ class Pipeline:
         logger.info(f"  行为统计: {summary['behavior_counts']}")
         logger.info(f"  告警次数: {summary['alert_count']}")
         logger.info(f"  处理模式: {'并发' if self.concurrent_mode else '级联'}")
-        logger.info(f"  YOLO: {yolo_fr['frame_rate']:.1f} frames/s (infer avg {yolo_stats['avg_ms']:.1f}ms, {yolo_stats['count']} 次)")
+        logger.info(f"  YOLO: {yolo_fr['frame_rate']:.1f} frames/s (infer avg={yolo_stats['avg_ms']:.1f}ms min={yolo_stats['min_ms']:.1f} max={yolo_stats['max_ms']:.1f}ms, {yolo_stats['count']} 次)")
+        logger.info(f"  Stream: {stream_stats['mbps']:.2f} MB/s (total {stream_stats['total_mb']:.1f} MB, avg {stream_stats.get('avg_frame_kb', 0):.1f} KB/frame)")
         logger.info(f"  Qwen: {qwen_stats['throughput']:.2f} req/s (avg {qwen_stats['avg_ms']:.1f}ms, {qwen_stats['count']} 次)")
         if self._camera_log is not None:
             logger.info(f"  日志条目: {self._camera_log.entry_count}")

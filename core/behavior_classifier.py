@@ -150,7 +150,7 @@ class BehaviorClassifier:
         categories_text = ""
         for cls in self.behavior_classes:
             categories_text += (
-                f"- **{cls['id']}** {cls['label_en']}): "
+                f"- **{cls['id']}** ({cls['label_en']}): "
                 f"{cls['description'].strip()} "
                 f"[severity: {cls['severity']}]\n"
             )

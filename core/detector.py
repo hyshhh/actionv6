@@ -80,9 +80,10 @@ class PersonDetector:
         self._cached_detections: list[PersonDetection] = []
         self._last_detection_frame_index: int = -1
 
-        # 功能3：FPS 统计
-        self._inference_times: list[float] = []  # 每次实际推理耗时列表
-        self._total_inference_count: int = 0      # 实际推理总次数
+        # 功能3：FPS 统计（滑动窗口，防止无限增长）
+        self._inference_times: list[float] = []  # 最近推理耗时列表（滑动窗口）
+        self._inference_window_max: int = 200     # 滑动窗口上限
+        self._total_inference_count: int = 0      # 实际推理总次数（累计，不丢弃）
 
         logger.info(f"加载 YOLOv8 模型: {model_path} (device={device})")
         self.model = YOLO(model_path)
@@ -273,10 +274,13 @@ model: auto
         self._cached_detections = detections
         self._last_detection_frame_index = frame_index
 
-        # 功能3：记录推理耗时
+        # 功能3：记录推理耗时（滑动窗口）
         infer_elapsed = time.time() - infer_start
         self._inference_times.append(infer_elapsed)
         self._total_inference_count += 1
+        # 滑动窗口裁剪：超出上限时保留最近一半
+        if len(self._inference_times) > self._inference_window_max:
+            self._inference_times = self._inference_times[self._inference_window_max // 2:]
 
         return detections
 
@@ -295,13 +299,14 @@ model: auto
     def get_fps_stats(self) -> dict:
         """功能3：返回 YOLO 推理详细统计"""
         if not self._inference_times:
-            return {"fps": 0.0, "avg_ms": 0.0, "count": 0, "min_ms": 0.0, "max_ms": 0.0}
+            return {"fps": 0.0, "avg_ms": 0.0, "count": 0, "window": 0, "min_ms": 0.0, "max_ms": 0.0}
         times_ms = [t * 1000 for t in self._inference_times]
         avg_ms = sum(times_ms) / len(times_ms)
         return {
             "fps": round(1000.0 / avg_ms, 1) if avg_ms > 0 else 0.0,
             "avg_ms": round(avg_ms, 2),
             "count": self._total_inference_count,
+            "window": len(self._inference_times),
             "min_ms": round(min(times_ms), 2),
             "max_ms": round(max(times_ms), 2),
         }
