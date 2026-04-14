@@ -495,7 +495,11 @@ python main.py --source video --input /media/ddc/新加卷/hys/qmy/agentold/dang
 python main.py --source video --input /media/ddc/新加卷/hys/hysnew/agent2/agent2/drowning_240112.mp4 --no-display
 ```
 
-### 7. 完整命令行参数
+### 7. vLLM 本地模型部署命令
+
+详见 [vllm_serve.md](vllm_serve.md)，包含 4 种模型的启动命令和参数说明。
+
+### 8. 完整命令行参数
 
 ```bash
 python main.py \
