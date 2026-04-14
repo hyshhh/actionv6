@@ -161,40 +161,108 @@ class QwenFpsTracker:
     """
     功能3：Qwen 推理速度统计。
 
-    Qwen 推理频率与 YOLO 不同：
-    - YOLO 根据每帧（或隔帧）的推理时间算 FPS
-    - Qwen 根据每次 process_every_n_frames 触发时的推理时间算 FPS
+    统计两个维度：
+    - latency（延迟）: 单次 API 请求的平均耗时
+    - throughput（吞吐）: 多线程并发下，每秒实际完成的请求数（滑动窗口 10 秒）
     """
 
-    def __init__(self):
+    def __init__(self, window_seconds: float = 10.0):
         self._inference_times: list[float] = []
         self._total_count: int = 0
+        # 滑动窗口：记录每次完成的时间戳
+        self._window_seconds = window_seconds
+        self._completion_timestamps: list[float] = []
 
     def record(self, elapsed: float):
+        now = time.time()
         self._inference_times.append(elapsed)
         self._total_count += 1
+        self._completion_timestamps.append(now)
+
+    def _cleanup_window(self):
+        """清理窗口外的旧记录"""
+        if not self._completion_timestamps:
+            return
+        cutoff = time.time() - self._window_seconds
+        # 找到第一个在窗口内的位置
+        idx = 0
+        while idx < len(self._completion_timestamps) and self._completion_timestamps[idx] < cutoff:
+            idx += 1
+        if idx > 0:
+            self._completion_timestamps = self._completion_timestamps[idx:]
 
     @property
-    def fps(self) -> float:
-        if not self._inference_times:
+    def throughput(self) -> float:
+        """实际吞吐量：滑动窗口内每秒完成的请求数（反映多线程并发效果）"""
+        self._cleanup_window()
+        if len(self._completion_timestamps) < 2:
             return 0.0
-        # 使用最近 N 次的滑动窗口均值（最近50次，防止统计漂移）
-        window = self._inference_times[-50:]
-        avg_time = sum(window) / len(window)
-        return 1.0 / avg_time if avg_time > 0 else 0.0
+        span = self._completion_timestamps[-1] - self._completion_timestamps[0]
+        if span <= 0:
+            return 0.0
+        return (len(self._completion_timestamps) - 1) / span
 
     def get_stats(self) -> dict:
         if not self._inference_times:
-            return {"fps": 0.0, "avg_ms": 0.0, "count": 0, "min_ms": 0.0, "max_ms": 0.0}
+            return {
+                "throughput": 0.0,
+                "avg_ms": 0.0, "count": 0,
+                "min_ms": 0.0, "max_ms": 0.0,
+            }
         window = self._inference_times[-50:]
         times_ms = [t * 1000 for t in window]
         avg_ms = sum(times_ms) / len(times_ms)
         return {
-            "fps": round(1000.0 / avg_ms, 1) if avg_ms > 0 else 0.0,
+            "throughput": round(self.throughput, 2),
             "avg_ms": round(avg_ms, 2),
             "count": self._total_count,
             "min_ms": round(min(times_ms), 2),
             "max_ms": round(max(times_ms), 2),
+        }
+
+
+class FrameRateTracker:
+    """
+    实际画面处理速率统计。
+
+    不同于 YOLO 单次推理耗时（detector.fps），
+    这里统计的是主线程实际处理帧的速度：
+    每秒有多少帧从 YOLO 流过（含隔帧推理时的缓存命中）。
+    """
+
+    def __init__(self, window_seconds: float = 10.0):
+        self._window_seconds = window_seconds
+        self._timestamps: list[float] = []
+
+    def tick(self):
+        """每处理一帧（含缓存命中）调用一次"""
+        self._timestamps.append(time.time())
+
+    def _cleanup(self):
+        if not self._timestamps:
+            return
+        cutoff = time.time() - self._window_seconds
+        idx = 0
+        while idx < len(self._timestamps) and self._timestamps[idx] < cutoff:
+            idx += 1
+        if idx > 0:
+            self._timestamps = self._timestamps[idx:]
+
+    @property
+    def frame_rate(self) -> float:
+        """实际帧处理速率（帧/秒）"""
+        self._cleanup()
+        if len(self._timestamps) < 2:
+            return 0.0
+        span = self._timestamps[-1] - self._timestamps[0]
+        if span <= 0:
+            return 0.0
+        return (len(self._timestamps) - 1) / span
+
+    def get_stats(self) -> dict:
+        return {
+            "frame_rate": round(self.frame_rate, 1),
+            "count": len(self._timestamps),
         }
 
 
@@ -354,6 +422,9 @@ class Pipeline:
         # 功能3：Qwen FPS 统计
         self._qwen_fps_tracker = QwenFpsTracker()
 
+        # 画面帧处理速率统计
+        self._yolo_frame_rate = FrameRateTracker()
+
         # 创建输出目录
         os.makedirs(output_dir, exist_ok=True)
         if save_crops:
@@ -501,6 +572,7 @@ class Pipeline:
 
                 # Step 1: 人体检测（含隔帧推理）
                 detections = self.detector.detect(frame, self._frame_count)
+                self._yolo_frame_rate.tick()  # 记录实际画面处理帧率
 
                 # Step 2: 帧缓冲区管理
                 if self.tracking_enabled and self._frame_buffer is not None:
@@ -1073,8 +1145,14 @@ class Pipeline:
 
         # 功能3：在画面上叠加 FPS 信息
         yolo_stats = self.detector.get_fps_stats()
+        yolo_fr = self._yolo_frame_rate.get_stats()
         qwen_stats = self._qwen_fps_tracker.get_stats()
-        fps_text = f"YOLO: {yolo_stats['fps']:.1f} FPS ({yolo_stats['avg_ms']:.1f}ms) | Qwen: {qwen_stats['fps']:.1f} FPS ({qwen_stats['avg_ms']:.1f}ms)"
+        fps_text = (
+            f"YOLO: {yolo_fr['frame_rate']:.1f} frames/s | "
+            f"infer {yolo_stats['avg_ms']:.1f}ms | "
+            f"Qwen: {qwen_stats['throughput']:.2f} req/s "
+            f"(avg {qwen_stats['avg_ms']:.0f}ms)"
+        )
         cv2.putText(annotated, fps_text, (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1)
 
         # 添加模式信息
@@ -1098,15 +1176,15 @@ class Pipeline:
     # ==================================================================
 
     def _print_fps_stats(self):
-        """功能3：在终端和日志中打印 YOLO 和 Qwen 推理速度"""
+        """功能3：在终端和日志中打印 YOLO 和 Qwen 实际处理速度"""
         yolo_stats = self.detector.get_fps_stats()
+        yolo_fr = self._yolo_frame_rate.get_stats()
         qwen_stats = self._qwen_fps_tracker.get_stats()
 
-        # 终端打印（带颜色分隔）
         fps_line = (
-            f"[FPS] YOLO: {yolo_stats['fps']:6.1f} FPS "
-            f"(avg {yolo_stats['avg_ms']:6.1f}ms, count={yolo_stats['count']}) | "
-            f"Qwen: {qwen_stats['fps']:6.1f} FPS "
+            f"[Speed] YOLO: {yolo_fr['frame_rate']:6.1f} frames/s "
+            f"(infer {yolo_stats['avg_ms']:6.1f}ms) | "
+            f"Qwen: {qwen_stats['throughput']:6.2f} req/s "
             f"(avg {qwen_stats['avg_ms']:6.1f}ms, count={qwen_stats['count']})"
         )
         logger.info(fps_line)
@@ -1262,9 +1340,10 @@ class Pipeline:
                     json.dump(self._report.alerts, f, ensure_ascii=False, indent=2)
                 logger.info(f"告警记录已保存: {alerts_path} ({len(self._report.alerts)} 条)")
 
-        # 打印最终摘要（含 FPS 统计）
+        # 打印最终摘要（含速度统计）
         summary = self._report.summary()
         yolo_stats = self.detector.get_fps_stats()
+        yolo_fr = self._yolo_frame_rate.get_stats()
         qwen_stats = self._qwen_fps_tracker.get_stats()
 
         logger.info("=" * 60)
@@ -1277,8 +1356,8 @@ class Pipeline:
         logger.info(f"  行为统计: {summary['behavior_counts']}")
         logger.info(f"  告警次数: {summary['alert_count']}")
         logger.info(f"  处理模式: {'并发' if self.concurrent_mode else '级联'}")
-        logger.info(f"  YOLO 推理速度: {yolo_stats['fps']:.1f} FPS (avg {yolo_stats['avg_ms']:.1f}ms, {yolo_stats['count']} 次)")
-        logger.info(f"  Qwen 推理速度: {qwen_stats['fps']:.1f} FPS (avg {qwen_stats['avg_ms']:.1f}ms, {qwen_stats['count']} 次)")
+        logger.info(f"  YOLO: {yolo_fr['frame_rate']:.1f} frames/s (infer avg {yolo_stats['avg_ms']:.1f}ms, {yolo_stats['count']} 次)")
+        logger.info(f"  Qwen: {qwen_stats['throughput']:.2f} req/s (avg {qwen_stats['avg_ms']:.1f}ms, {qwen_stats['count']} 次)")
         if self._camera_log is not None:
             logger.info(f"  日志条目: {self._camera_log.entry_count}")
         logger.info("=" * 60)
