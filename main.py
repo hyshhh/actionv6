@@ -94,6 +94,7 @@ def build_pipeline(args: argparse.Namespace, config: dict) -> Pipeline:
         with_reid=trk_cfg.get("with_reid", False),
         # 功能1：YOLO 隔帧推理
         yolo_skip_frames=det_cfg.get("yolo_skip_frames", 0),
+        min_bbox_size=det_cfg.get("min_bbox_size", 8),
     )
 
     # ---- 关键帧提取器 ----

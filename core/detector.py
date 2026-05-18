@@ -46,6 +46,7 @@ class PersonDetector:
         nms_iou: float = 0.5,
         with_reid: bool = False,
         yolo_skip_frames: int = 0,
+        min_bbox_size: int = 8,
     ):
         """
         Args:
@@ -64,6 +65,7 @@ class PersonDetector:
             nms_iou: NMS IoU 阈值（合并重叠框的严格程度）
             with_reid: BoT-SORT 是否启用 ReID 外观特征匹配
             yolo_skip_frames: YOLO 隔帧推理间隔。0=每帧推理，N=每N帧推理一次（功能1）
+            min_bbox_size: 最小检测框像素（宽或高低于此值的框被过滤）
         """
         self.confidence = confidence
         self.device = device
@@ -75,6 +77,7 @@ class PersonDetector:
         self.tracker_enabled = tracker_enabled
         self.tracker_type = tracker_type
         self.yolo_skip_frames = max(0, yolo_skip_frames)
+        self.min_bbox_size = min_bbox_size
 
         # 功能1：隔帧推理 — 缓存上一次的检测结果
         self._cached_detections: list[PersonDetection] = []
@@ -260,7 +263,7 @@ model: auto
                 )
 
                 # 过滤太小的框（可能是噪声）
-                if bbox.width < 20 or bbox.height < 20:
+                if bbox.width < self.min_bbox_size or bbox.height < self.min_bbox_size:
                     continue
 
                 detections.append(

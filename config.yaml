@@ -33,23 +33,24 @@ local_model:
 # 人体检测器配置
 detector:
   model: "yolo11n.pt"            # YOLO 模型文件（自动下载）
-  confidence: 0.1                # 检测置信度阈值
+  confidence: 0.05               # 检测置信度阈值（小目标场景宜低，靠 ByteTrack 兜底）
   device: "cuda:0"               # 推理设备: cpu 或 cuda:0
   class_ids: [0, 1, 2]           # 要检测的类别 ID 列表，全部当作"人"处理
                                   # 单个值也支持，如: 0（兼容旧配置的 class_id）
-  detect_width: 640              # 检测推理宽度（0=保持原始分辨率）
-  detect_height: 640             # 检测推理高度（0=保持原始分辨率）
-  nms_iou: 0.1                   # NMS IoU 阈值（越小越严格，合并更多重叠框）
+  detect_width: 0                # 检测推理宽度（0=保持原始分辨率，小目标场景不要缩放）
+  detect_height: 0               # 检测推理高度（0=保持原始分辨率）
+  nms_iou: 0.4                   # NMS IoU 阈值（小目标场景宜宽松，避免误杀）
+  min_bbox_size: 8               # 最小检测框像素（小目标场景宜小，原默认20太严格）
   yolo_skip_frames: 0            # YOLO隔帧推理间隔。0=每帧推理，N=每N帧推理一次（节省资源）
 
 # 目标跟踪配置（ByteTrack）
 tracker:
-  enabled: false                  # 是否启用目标跟踪
+  enabled: true                   # 是否启用目标跟踪
   tracker_type: "bytetrack"      # 跟踪器类型: bytetrack / botsort
-  track_high_thresh: 0.6         # 高置信度跟踪阈值
-  track_low_thresh: 0.3          # 低置信度跟踪阈值（ByteTrack 二次匹配）
-  match_thresh: 0.8              # 匹配阈值
-  track_buffer: 30               # 跟踪丢失后保留帧数（ID保持时间）
+  track_high_thresh: 0.3         # 高置信度跟踪阈值（小目标场景宜低）
+  track_low_thresh: 0.15         # 低置信度跟踪阈值（ByteTrack 二次匹配）
+  match_thresh: 0.6              # 匹配阈值（小目标场景宜宽松，允许更大 bbox 变化）
+  track_buffer: 60               # 跟踪丢失后保留帧数（小目标容易短暂丢失，加大缓冲）
   with_reid: false               # BoT-SORT 是否启用 ReID 外观特征（需要额外下载模型）
 
 # 关键帧提取配置
