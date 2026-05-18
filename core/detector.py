@@ -111,9 +111,16 @@ class PersonDetector:
         track_buffer: int,
         with_reid: bool = False,
     ) -> str:
-        """生成 tracker YAML 配置文件并返回路径"""
+        """生成 tracker YAML 配置文件并返回路径（全局缓存，避免重复写入）"""
         import tempfile
         import os
+
+        # 按参数生成唯一文件名，相同参数复用已有文件
+        param_hash = f"{tracker_type}_{track_high_thresh}_{track_low_thresh}_{match_thresh}_{track_buffer}_{with_reid}"
+        config_path = os.path.join(tempfile.gettempdir(), f"tracker_{param_hash}.yaml")
+
+        if os.path.exists(config_path):
+            return config_path
 
         if tracker_type == "bytetrack":
             content = f"""\
@@ -143,8 +150,6 @@ model: auto
         else:
             raise ValueError(f"不支持的跟踪器类型: {tracker_type}")
 
-        # 写入临时文件
-        config_path = os.path.join(tempfile.gettempdir(), f"tracker_{tracker_type}.yaml")
         with open(config_path, "w") as f:
             f.write(content)
 
@@ -284,9 +289,9 @@ model: auto
 
         return detections
 
-    def detect_batch(self, frames: list[np.ndarray]) -> list[list[PersonDetection]]:
-        """批量检测多帧"""
-        return [self.detect(frame, i) for i, frame in enumerate(frames)]
+    def detect_batch(self, frames: list[np.ndarray], start_index: int = 0) -> list[list[PersonDetection]]:
+        """批量检测多帧，start_index 用于保持全局帧序号连续"""
+        return [self.detect(frame, start_index + i) for i, frame in enumerate(frames)]
 
     @property
     def fps(self) -> float:

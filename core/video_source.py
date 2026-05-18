@@ -236,5 +236,13 @@ class VideoSource:
         h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         return (w, h)
 
+    def __enter__(self):
+        self.open()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.release()
+        return False
+
     def __del__(self):
         self.release()

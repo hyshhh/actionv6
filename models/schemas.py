@@ -15,17 +15,6 @@ class Severity(str, Enum):
     NORMAL = "normal"       # 正常
 
 
-class BehaviorID(str, Enum):
-    """预定义行为 ID（可扩展）"""
-    DROWNING = "0"
-    SWIMMING = "1"
-    CLIMBING = "2"
-    NORMAL_WALKING = "3"
-    WATERHELPING = "4"
-    ABOARD = "5"
-    UNKNOWN = "unknown"
-
-
 @dataclass
 class BoundingBox:
     """人体检测框"""

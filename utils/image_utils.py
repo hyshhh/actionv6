@@ -109,7 +109,7 @@ def encode_image_to_base64(image: np.ndarray, fmt: str = ".jpg", quality: int = 
 
     success, buffer = cv2.imencode(fmt, image, encode_params)
     if not success:
-        raise ValueError(f"Failed to encode image to {fmt}")
+        raise ValueError(f"图像编码失败: {fmt}")
 
     return base64.b64encode(buffer).decode("utf-8")
 
