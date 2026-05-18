@@ -129,6 +129,9 @@ class Pipeline:
             from collections import deque
             self._frame_buffer = deque(maxlen=self.buffer_size)
 
+        # 追踪标签缓存：track_id → 最新 behavior_dict（VLM 不推的帧也持续显示）
+        self._track_labels: dict[int, dict] = {}
+
         # 告警冷却记录
         self._alert_cooldowns: dict[str, float] = {}
 
@@ -259,6 +262,22 @@ class Pipeline:
                     dequeued_task = self._concurrent_queue.try_dequeue_completed()
                     if dequeued_task is not None:
                         frame_analysis = self._build_analysis_from_task(dequeued_task)
+
+                # Step 5.5: 更新追踪标签缓存（每帧都执行，保证标签持续跟随）
+                self._update_track_labels(frame_analysis, detections)
+
+                # 非 VLM 触发帧：从缓存恢复标签
+                if frame_analysis is None and self.tracking_enabled:
+                    cached_dicts = self._get_cached_behavior_dicts(detections)
+                    if cached_dicts:
+                        frame_analysis = FrameAnalysis(
+                            frame_index=self._frame_count,
+                            timestamp=time.time(),
+                            frame_width=frame.shape[1],
+                            frame_height=frame.shape[0],
+                            detections=detections,
+                            behavior_dicts=cached_dicts,
+                        )
 
                 # Step 6: 可视化
                 if self.display:
@@ -755,6 +774,37 @@ class Pipeline:
         """记录行为到报告统计"""
         bid = result.behavior_id
         self._report.behavior_counts[bid] = self._report.behavior_counts.get(bid, 0) + 1
+
+    def _update_track_labels(self, frame_analysis: Optional[FrameAnalysis], detections: list[PersonDetection]):
+        """
+        更新追踪标签缓存。
+
+        VLM 触发帧：用最新结果覆盖缓存。
+        非触发帧：保持上次的标签不变。
+        已离开画面的 track_id 自动清除。
+        """
+        if frame_analysis is not None and frame_analysis.behavior_dicts:
+            for bd in frame_analysis.behavior_dicts:
+                pk = bd.get("person_key")
+                if pk is not None and isinstance(pk, int):
+                    self._track_labels[pk] = bd
+
+        # 清除已离开画面的 track_id
+        current_ids = set()
+        for d in detections:
+            if d.track_id is not None:
+                current_ids.add(d.track_id)
+        stale_ids = [tid for tid in self._track_labels if tid not in current_ids]
+        for tid in stale_ids:
+            del self._track_labels[tid]
+
+    def _get_cached_behavior_dicts(self, detections: list[PersonDetection]) -> list[dict]:
+        """从缓存中获取当前帧的标签（用于非 VLM 触发帧）"""
+        result = []
+        for d in detections:
+            if d.track_id is not None and d.track_id in self._track_labels:
+                result.append(self._track_labels[d.track_id])
+        return result if result else None
 
     # ==================================================================
     # 可视化与显示
