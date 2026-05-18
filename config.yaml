@@ -116,7 +116,8 @@ video_source:
 
 # 输出配置
 output:
-  save_annotated: true           # 保存标注后的帧
+  save_annotated: true           # 保存标注后的帧（save_video=true 时此项无效）
+  save_video: false              # 保存标注后的视频（与 save_annotated 互斥，优先级更高）
   save_crops: true               # 保存人体裁剪图
   save_report: true              # 保存行为分析报告
   output_dir: "output"           # 输出目录

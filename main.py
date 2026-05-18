@@ -161,6 +161,7 @@ def build_pipeline(args: argparse.Namespace, config: dict) -> Pipeline:
         max_queued_frames=pp_cfg.get("max_queued_frames", 50),
         output_dir=output_dir,
         save_annotated=out_cfg.get("save_annotated", True),
+        save_video=out_cfg.get("save_video", False),
         save_crops=out_cfg.get("save_crops", True),
         save_report=out_cfg.get("save_report", True),
         display=pp_cfg.get("display", True),
@@ -269,6 +270,12 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--save-video",
+        action="store_true",
+        help="保存标注后的视频（替代保存单帧截图）",
+    )
+
+    parser.add_argument(
         "--camera-interval",
         type=float,
         default=None,
@@ -324,6 +331,8 @@ def main():
         config.setdefault("pipeline", {})["display"] = False
     if args.no_crops:
         config.setdefault("output", {})["save_crops"] = False
+    if args.save_video:
+        config.setdefault("output", {})["save_video"] = True
     if args.camera_interval:
         config.setdefault("pipeline", {})["camera_interval"] = args.camera_interval
     if args.display_scale:

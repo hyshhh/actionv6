@@ -69,6 +69,7 @@ class Pipeline:
         max_queued_frames: int = 50,
         output_dir: str = "output",
         save_annotated: bool = True,
+        save_video: bool = False,
         save_crops: bool = True,
         save_report: bool = True,
         display: bool = True,
@@ -92,7 +93,8 @@ class Pipeline:
         self.max_concurrent = max(1, max_concurrent)
         self.concurrent_mode = concurrent_mode
         self.output_dir = output_dir
-        self.save_annotated = save_annotated
+        self.save_video = save_video
+        self.save_annotated = save_annotated and not save_video
         self.save_crops = save_crops
         self.save_report = save_report
         self.display = display
@@ -152,6 +154,12 @@ class Pipeline:
         self._yolo_frame_rate = FrameRateTracker()
         self._bitrate_tracker = BitrateTracker()
         self._total_frame_tracker = TotalFrameTracker()
+
+        # 视频输出
+        self._video_writer: Optional[cv2.VideoWriter] = None
+        self._video_path: str = ""
+        if self.save_video:
+            self._video_path = os.path.join(output_dir, "output_annotated.mp4")
 
         # 创建输出目录
         os.makedirs(output_dir, exist_ok=True)
@@ -255,6 +263,12 @@ class Pipeline:
                 # Step 6: 可视化
                 if self.display:
                     self._render_display(frame, detections, frame_analysis)
+
+                # 视频输出模式：每帧标注后写入视频
+                if self.save_video:
+                    behavior_dicts = frame_analysis.behavior_dicts if frame_analysis else None
+                    annotated = draw_detections(frame, detections, behavior_dicts)
+                    self._write_video_frame(annotated)
 
                 # 记录端到端总耗时
                 self._total_frame_tracker.record(time.time() - frame_start_time)
@@ -553,6 +567,40 @@ class Pipeline:
 
         self._report.frame_analyses.append(analysis)
         return analysis
+
+    # ==================================================================
+    # 视频输出
+    # ==================================================================
+
+    def _ensure_video_writer(self, frame: np.ndarray):
+        """延迟初始化 VideoWriter（首帧时根据分辨率和源帧率创建）"""
+        if self._video_writer is not None:
+            return
+
+        h, w = frame.shape[:2]
+        # 从视频源获取帧率，摄像头默认 25fps
+        fps = 25.0
+        if self.source._cap is not None:
+            src_fps = self.source._cap.get(cv2.CAP_PROP_FPS)
+            if src_fps > 0:
+                fps = src_fps
+
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        self._video_writer = cv2.VideoWriter(self._video_path, fourcc, fps, (w, h))
+        logger.info(f"视频输出已初始化: {self._video_path} ({w}x{h} @ {fps:.1f}fps)")
+
+    def _write_video_frame(self, frame: np.ndarray):
+        """将一帧写入输出视频"""
+        self._ensure_video_writer(frame)
+        if self._video_writer is not None:
+            self._video_writer.write(frame)
+
+    def _release_video_writer(self):
+        """释放 VideoWriter"""
+        if self._video_writer is not None:
+            self._video_writer.release()
+            self._video_writer = None
+            logger.info(f"输出视频已保存: {self._video_path}")
 
     # ==================================================================
     # 辅助方法
@@ -896,6 +944,9 @@ class Pipeline:
 
         if self.display:
             cv2.destroyAllWindows()
+
+        # 释放视频输出
+        self._release_video_writer()
 
         # 保存报告
         if self.save_report:
