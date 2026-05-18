@@ -42,6 +42,10 @@ detector:
   nms_iou: 0.4                   # NMS IoU 阈值（小目标场景宜宽松，避免误杀）
   min_bbox_size: 8               # 最小检测框像素（小目标场景宜小，原默认20太严格）
   yolo_skip_frames: 0            # YOLO隔帧推理间隔。0=每帧推理，N=每N帧推理一次（节省资源）
+  sahi_enabled: false            # 是否启用 SAHI 切片推理（提升小目标检出率，帧率会降低）
+  sahi_slice_width: 640          # SAHI 切片宽度
+  sahi_slice_height: 640         # SAHI 切片高度
+  sahi_overlap: 0.2              # SAHI 切片重叠比例
 
 # 目标跟踪配置（ByteTrack）
 tracker:

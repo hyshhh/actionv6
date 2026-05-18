@@ -95,6 +95,11 @@ def build_pipeline(args: argparse.Namespace, config: dict) -> Pipeline:
         # 功能1：YOLO 隔帧推理
         yolo_skip_frames=det_cfg.get("yolo_skip_frames", 0),
         min_bbox_size=det_cfg.get("min_bbox_size", 8),
+        # SAHI 小目标增强
+        sahi_enabled=det_cfg.get("sahi_enabled", False),
+        sahi_slice_width=det_cfg.get("sahi_slice_width", 640),
+        sahi_slice_height=det_cfg.get("sahi_slice_height", 640),
+        sahi_overlap=det_cfg.get("sahi_overlap", 0.2),
     )
 
     # ---- 关键帧提取器 ----

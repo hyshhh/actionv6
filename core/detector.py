@@ -1,4 +1,4 @@
-"""人体检测器 — 基于 YOLOv8 + ByteTrack 目标跟踪"""
+"""人体检测器 — 基于 YOLOv8 + SAHI + ByteTrack 目标跟踪"""
 
 from __future__ import annotations
 
@@ -17,13 +17,14 @@ logger = get_logger()
 
 class PersonDetector:
     """
-    使用 YOLOv8 进行人体检测，支持 ByteTrack 目标跟踪。
+    使用 YOLOv8 进行人体检测，支持 SAHI 小目标增强 + ByteTrack 目标跟踪。
 
     支持：
     - 自动下载预训练模型
     - CPU / GPU 推理
     - 可配置置信度阈值
     - 可配置检测分辨率（降低推理时间）
+    - SAHI 切片推理（提升小目标检出率）
     - ByteTrack 目标跟踪，为每个检测目标分配稳定的 track_id
     - YOLO 隔帧推理（yolo_skip_frames），节省计算资源
     - YOLO 推理 FPS 统计
@@ -47,6 +48,10 @@ class PersonDetector:
         with_reid: bool = False,
         yolo_skip_frames: int = 0,
         min_bbox_size: int = 8,
+        sahi_enabled: bool = False,
+        sahi_slice_width: int = 640,
+        sahi_slice_height: int = 640,
+        sahi_overlap: float = 0.2,
     ):
         """
         Args:
@@ -64,12 +69,15 @@ class PersonDetector:
             track_buffer: 跟踪丢失后保留帧数
             nms_iou: NMS IoU 阈值（合并重叠框的严格程度）
             with_reid: BoT-SORT 是否启用 ReID 外观特征匹配
-            yolo_skip_frames: YOLO 隔帧推理间隔。0=每帧推理，N=每N帧推理一次（功能1）
+            yolo_skip_frames: YOLO 隔帧推理间隔。0=每帧推理，N=每N帧推理一次
             min_bbox_size: 最小检测框像素（宽或高低于此值的框被过滤）
+            sahi_enabled: 是否启用 SAHI 切片推理（提升小目标检出率）
+            sahi_slice_width: SAHI 切片宽度
+            sahi_slice_height: SAHI 切片高度
+            sahi_overlap: SAHI 切片重叠比例
         """
         self.confidence = confidence
         self.device = device
-        # 统一为列表，支持多个类别 ID 都当作"人"
         self.class_ids = [class_ids] if isinstance(class_ids, int) else list(class_ids)
         self.nms_iou = nms_iou
         self.detect_width = detect_width
@@ -79,17 +87,28 @@ class PersonDetector:
         self.yolo_skip_frames = max(0, yolo_skip_frames)
         self.min_bbox_size = min_bbox_size
 
-        # 功能1：隔帧推理 — 缓存上一次的检测结果
+        # SAHI 配置
+        self.sahi_enabled = sahi_enabled
+        self.sahi_slice_width = sahi_slice_width
+        self.sahi_slice_height = sahi_slice_height
+        self.sahi_overlap = sahi_overlap
+        self._sahi_model = None
+
+        # 隔帧推理缓存
         self._cached_detections: list[PersonDetection] = []
         self._last_detection_frame_index: int = -1
 
-        # 功能3：FPS 统计（滑动窗口，防止无限增长）
-        self._inference_times: list[float] = []  # 最近推理耗时列表（滑动窗口）
-        self._inference_window_max: int = 200     # 滑动窗口上限
-        self._total_inference_count: int = 0      # 实际推理总次数（累计，不丢弃）
+        # FPS 统计
+        self._inference_times: list[float] = []
+        self._inference_window_max: int = 200
+        self._total_inference_count: int = 0
 
         logger.info(f"加载 YOLOv8 模型: {model_path} (device={device})")
         self.model = YOLO(model_path)
+
+        # 初始化 SAHI（延迟加载，首次推理时创建）
+        if self.sahi_enabled:
+            logger.info(f"SAHI 已启用: slice={sahi_slice_width}x{sahi_slice_height}, overlap={sahi_overlap}")
 
         # 构建 tracker 配置文件
         self.tracker_config = self._build_tracker_config(
@@ -98,12 +117,34 @@ class PersonDetector:
         )
 
         mode = f"跟踪({tracker_type})" if tracker_enabled else "仅检测"
+        if sahi_enabled:
+            mode += " + SAHI"
         skip_info = f"每帧推理" if self.yolo_skip_frames == 0 else f"每{self.yolo_skip_frames + 1}帧推理1次"
         logger.info(
             f"模型加载完成, 模式={mode}, "
             f"检测分辨率: {'原始' if detect_width == 0 else f'{detect_width}x{detect_height}'}, "
             f"YOLO推理: {skip_info}"
         )
+
+    def _init_sahi_model(self):
+        """延迟初始化 SAHI 模型（首次推理时创建）"""
+        if self._sahi_model is not None:
+            return
+        try:
+            from sahi import AutoDetectionModel
+            self._sahi_model = AutoDetectionModel.from_pretrained(
+                model_type="ultralytics",
+                model_path=self.model.model_name if hasattr(self.model, 'model_name') else str(self.model),
+                confidence_threshold=self.confidence,
+                device=self.device,
+            )
+            logger.info("SAHI 模型初始化完成")
+        except ImportError:
+            logger.error("sahi 未安装，请运行: pip install sahi")
+            self.sahi_enabled = False
+        except Exception as e:
+            logger.error(f"SAHI 初始化失败: {e}")
+            self.sahi_enabled = False
 
     @staticmethod
     def _build_tracker_config(
@@ -118,7 +159,6 @@ class PersonDetector:
         import tempfile
         import os
 
-        # 按参数生成唯一文件名，相同参数复用已有文件
         param_hash = f"{tracker_type}_{track_high_thresh}_{track_low_thresh}_{match_thresh}_{track_buffer}_{with_reid}"
         config_path = os.path.join(tempfile.gettempdir(), f"tracker_{param_hash}.yaml")
 
@@ -159,27 +199,56 @@ model: auto
         return config_path
 
     def _should_skip_detection(self, frame_index: int) -> bool:
-        """
-        判断当前帧是否应跳过 YOLO 推理（功能1）。
-
-        规则：
-        - yolo_skip_frames == 0：永远不跳过（每帧推理）
-        - yolo_skip_frames > 0：距离上次实际推理不足 skip+1 帧时跳过
-        """
+        """判断当前帧是否应跳过推理"""
         if self.yolo_skip_frames <= 0:
             return False
         if self._last_detection_frame_index < 0:
-            return False  # 第一次必须推理
+            return False
         return (frame_index - self._last_detection_frame_index) <= self.yolo_skip_frames
+
+    def _detect_with_sahi(self, frame: np.ndarray) -> list[tuple[float, float, float, float, float]]:
+        """
+        使用 SAHI 切片推理检测小目标。
+
+        Returns:
+            [(x1, y1, x2, y2, confidence), ...] 原始分辨率坐标
+        """
+        self._init_sahi_model()
+        if self._sahi_model is None:
+            return []
+
+        from sahi.predict import get_sliced_prediction
+
+        result = get_sliced_prediction(
+            image=frame,
+            detection_model=self._sahi_model,
+            slice_height=self.sahi_slice_height,
+            slice_width=self.sahi_slice_width,
+            overlap_height_ratio=self.sahi_overlap,
+            overlap_width_ratio=self.sahi_overlap,
+            postprocess_type="NMS",
+            postprocess_match_threshold=self.nms_iou,
+            verbose=0,
+        )
+
+        detections = []
+        for pred in result.object_prediction_list:
+            # 过滤非目标类别
+            if pred.category.id not in self.class_ids:
+                continue
+
+            bbox = pred.bbox
+            conf = pred.score.value
+            detections.append((bbox.minx, bbox.miny, bbox.maxx, bbox.maxy, conf))
+
+        return detections
 
     def detect(self, frame: np.ndarray, frame_index: int = 0) -> list[PersonDetection]:
         """
         在单帧图像中检测人体。
 
-        如果启用跟踪，使用 model.track() 返回带 track_id 的结果；
-        否则使用 model.predict() 纯检测。
-
-        功能1：如果 yolo_skip_frames > 0，非推理帧直接返回上次缓存结果。
+        SAHI 模式：切片推理提升小目标检出率，配合 ByteTrack 跟踪。
+        标准模式：直接 YOLO 推理，配合 ByteTrack 跟踪。
 
         Args:
             frame: BGR 格式的帧图像
@@ -188,105 +257,104 @@ model: auto
         Returns:
             PersonDetection 列表（含 track_id），按置信度降序排列
         """
-        # 功能1：检查是否跳过本帧推理
         if self._should_skip_detection(frame_index):
             return self._cached_detections
 
         infer_start = time.time()
         orig_h, orig_w = frame.shape[:2]
 
-        # 缩放到检测分辨率
-        if self.detect_width > 0 and self.detect_height > 0:
-            infer_frame = cv2.resize(
-                frame, (self.detect_width, self.detect_height),
-                interpolation=cv2.INTER_LINEAR,
-            )
-            scale_x = orig_w / self.detect_width
-            scale_y = orig_h / self.detect_height
-        else:
-            infer_frame = frame
-            scale_x = 1.0
-            scale_y = 1.0
+        if self.sahi_enabled:
+            # ===== SAHI 切片推理 =====
+            raw_dets = self._detect_with_sahi(frame)
 
-        # 选择检测或跟踪模式
-        if self.tracker_enabled:
-            results = self.model.track(
-                infer_frame,
-                device=self.device,
-                classes=self.class_ids,
-                conf=self.confidence,
-                iou=self.nms_iou,
-                max_det=50,
-                tracker=self.tracker_config,
-                persist=True,
-                verbose=False,
-            )
-        else:
-            results = self.model(
-                infer_frame,
-                device=self.device,
-                classes=self.class_ids,
-                conf=self.confidence,
-                iou=self.nms_iou,
-                max_det=50,
-                verbose=False,
-            )
-
-        detections: list[PersonDetection] = []
-
-        for result in results:
-            if result.boxes is None:
-                continue
-
-            for box in result.boxes:
-                # 提取坐标和置信度
-                xyxy = box.xyxy[0].cpu().numpy()
-                conf = float(box.conf[0].cpu().numpy())
-
-                # 提取 track_id（跟踪模式下可用）
-                track_id = None
-                if self.tracker_enabled and box.id is not None:
-                    track_id = int(box.id[0].cpu().numpy())
-
-                # 将坐标映射回原始分辨率
-                x1 = float(xyxy[0]) * scale_x
-                y1 = float(xyxy[1]) * scale_y
-                x2 = float(xyxy[2]) * scale_x
-                y2 = float(xyxy[3]) * scale_y
-
-                bbox = BoundingBox(
-                    x1=x1,
-                    y1=y1,
-                    x2=x2,
-                    y2=y2,
-                    confidence=conf,
-                )
-
-                # 过滤太小的框（可能是噪声）
+            # SAHI 已在原图上操作，不需要缩放
+            detections: list[PersonDetection] = []
+            for x1, y1, x2, y2, conf in raw_dets:
+                bbox = BoundingBox(x1=x1, y1=y1, x2=x2, y2=y2, confidence=conf)
                 if bbox.width < self.min_bbox_size or bbox.height < self.min_bbox_size:
                     continue
+                detections.append(PersonDetection(
+                    frame_index=frame_index,
+                    timestamp=time.time(),
+                    bbox=bbox,
+                    track_id=None,  # SAHI 不提供跟踪，track_id 由外部管理
+                ))
+        else:
+            # ===== 标准 YOLO 推理 =====
+            if self.detect_width > 0 and self.detect_height > 0:
+                infer_frame = cv2.resize(
+                    frame, (self.detect_width, self.detect_height),
+                    interpolation=cv2.INTER_LINEAR,
+                )
+                scale_x = orig_w / self.detect_width
+                scale_y = orig_h / self.detect_height
+            else:
+                infer_frame = frame
+                scale_x = 1.0
+                scale_y = 1.0
 
-                detections.append(
-                    PersonDetection(
+            if self.tracker_enabled:
+                results = self.model.track(
+                    infer_frame,
+                    device=self.device,
+                    classes=self.class_ids,
+                    conf=self.confidence,
+                    iou=self.nms_iou,
+                    max_det=50,
+                    tracker=self.tracker_config,
+                    persist=True,
+                    verbose=False,
+                )
+            else:
+                results = self.model(
+                    infer_frame,
+                    device=self.device,
+                    classes=self.class_ids,
+                    conf=self.confidence,
+                    iou=self.nms_iou,
+                    max_det=50,
+                    verbose=False,
+                )
+
+            detections: list[PersonDetection] = []
+
+            for result in results:
+                if result.boxes is None:
+                    continue
+
+                for box in result.boxes:
+                    xyxy = box.xyxy[0].cpu().numpy()
+                    conf = float(box.conf[0].cpu().numpy())
+
+                    track_id = None
+                    if self.tracker_enabled and box.id is not None:
+                        track_id = int(box.id[0].cpu().numpy())
+
+                    x1 = float(xyxy[0]) * scale_x
+                    y1 = float(xyxy[1]) * scale_y
+                    x2 = float(xyxy[2]) * scale_x
+                    y2 = float(xyxy[3]) * scale_y
+
+                    bbox = BoundingBox(x1=x1, y1=y1, x2=x2, y2=y2, confidence=conf)
+
+                    if bbox.width < self.min_bbox_size or bbox.height < self.min_bbox_size:
+                        continue
+
+                    detections.append(PersonDetection(
                         frame_index=frame_index,
                         timestamp=time.time(),
                         bbox=bbox,
                         track_id=track_id,
-                    )
-                )
+                    ))
 
-        # 按置信度降序
         detections.sort(key=lambda d: d.bbox.confidence, reverse=True)
 
-        # 功能1：更新缓存
         self._cached_detections = detections
         self._last_detection_frame_index = frame_index
 
-        # 功能3：记录推理耗时（滑动窗口）
         infer_elapsed = time.time() - infer_start
         self._inference_times.append(infer_elapsed)
         self._total_inference_count += 1
-        # 滑动窗口裁剪：超出上限时保留最近一半
         if len(self._inference_times) > self._inference_window_max:
             self._inference_times = self._inference_times[self._inference_window_max // 2:]
 
@@ -298,14 +366,14 @@ model: auto
 
     @property
     def fps(self) -> float:
-        """功能3：返回 YOLO 推理平均 FPS"""
+        """返回推理平均 FPS"""
         if not self._inference_times:
             return 0.0
         avg_time = sum(self._inference_times) / len(self._inference_times)
         return 1.0 / avg_time if avg_time > 0 else 0.0
 
     def get_fps_stats(self) -> dict:
-        """功能3：返回 YOLO 推理详细统计"""
+        """返回推理详细统计"""
         if not self._inference_times:
             return {"fps": 0.0, "avg_ms": 0.0, "count": 0, "window": 0, "min_ms": 0.0, "max_ms": 0.0}
         times_ms = [t * 1000 for t in self._inference_times]
