@@ -17,7 +17,7 @@ class QwenFpsTracker:
     - throughput（吞吐）: 多线程并发下，每秒实际完成的请求数（滑动窗口 10 秒）
     """
 
-    def __init__(self, window_seconds: float = 10.0):
+    def __init__(self, window_seconds: float = 60.0):
         self._lock = threading.Lock()
         self._inference_times: list[float] = []
         self._total_count: int = 0
