@@ -26,7 +26,7 @@ local_model:
   api_key: "abc123"              # vllm serve 启动时设置的 --api-key（无鉴权则留空）
   api_url: "http://localhost:7890/v1"  # vLLM OpenAI 兼容接口地址
   model: "Qwen/Qwen3-VL-4B-AWQ"  # --served-model-name 设置的模型名
-  max_tokens: 512                # Qwen3 默认开启 thinking，128 不够输出完整 JSON
+  max_tokens: 256                # Qwen3 thinking 模式需要足够 token，但 512 太慢
   temperature: 0.1
   timeout: 60                    # 本地推理可能更慢，给长一点
 
@@ -133,8 +133,8 @@ output:
 # 流水线配置
 pipeline:
   process_every_n_frames: 30     # 每 N 帧触发一次 API 调用（控制推理频率）
-  buffer_size: 30                 # 历史帧缓冲区大小（仅追踪模式生效，控制 temporal 范围）
-  max_concurrent: 5              # 最大并发 API 请求数（1=串行，≥2=启用并发线程池）
+  buffer_size: 3                 # 历史帧缓冲区大小（仅追踪模式生效，控制 temporal 范围）
+  max_concurrent: 2              # 最大并发 API 请求数（1=串行，≥2=启用并发线程池）
   alert_cooldown: 5              # 同一行为告警冷却时间（秒）
   display: true                  # 是否显示实时画面（需要 GUI）
   display_scale: 0.1             # 视频窗口缩放比例
