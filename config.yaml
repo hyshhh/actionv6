@@ -33,7 +33,7 @@ local_model:
 # 人体检测器配置
 detector:
   model: "yolov8n.pt"            # YOLO 模型文件（自动下载）
-  confidence: 0.25               # 检测置信度阈值（太低=噪声多，太高=漏检）
+  confidence: 0.15               # 检测置信度阈值（太低=噪声多，太高=漏检）
   device: "cuda:0"               # 推理设备: cpu 或 cuda:0
   class_ids: [0, 1, 2]           # 要检测的类别 ID 列表，全部当作"人"处理
                                   # 单个值也支持，如: 0（兼容旧配置的 class_id）
@@ -45,9 +45,9 @@ detector:
   sahi_enabled: true             # 是否启用 SAHI 切片推理（提升小目标检出率，帧率会降低）
   sahi_batch_enabled: true       # SAHI 批量推理（true=批量快4-5倍，false=逐片兼容性好）
   half_precision: true           # FP16 半精度推理（GPU 加速 ~20%，CPU 不支持）
-  sahi_slice_width: 640          # SAHI 切片宽度
-  sahi_slice_height: 640         # SAHI 切片高度
-  sahi_overlap: 0.2              # SAHI 切片重叠比例
+  sahi_slice_width: 420          # SAHI 切片宽度
+  sahi_slice_height: 420         # SAHI 切片高度
+  sahi_overlap: 0.1              # SAHI 切片重叠比例
 
 # 目标跟踪配置（ByteTrack）
 tracker:
@@ -134,7 +134,7 @@ output:
 pipeline:
   process_every_n_frames: 30     # 每 N 帧触发一次 API 调用（控制推理频率）
   buffer_size: 1                 # 历史帧缓冲区大小（仅追踪模式生效，控制 temporal 范围）
-  max_concurrent: 2              # 最大并发 API 请求数（1=串行，≥2=启用并发线程池）
+  max_concurrent: 20             # 最大并发 API 请求数（1=串行，≥2=启用并发线程池）
   alert_cooldown: 5              # 同一行为告警冷却时间（秒）
   display: true                  # 是否显示实时画面（需要 GUI）
   display_scale: 0.1             # 视频窗口缩放比例
