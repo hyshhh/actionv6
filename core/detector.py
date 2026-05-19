@@ -321,6 +321,7 @@ model: auto
             conf=self.confidence,
             iou=self.nms_iou,
             max_det=50,
+            half=True,
             verbose=False,
         )
 
@@ -428,6 +429,7 @@ model: auto
                     conf=self.confidence,
                     iou=self.nms_iou,
                     max_det=50,
+                    half=True,
                     tracker=self.tracker_config,
                     persist=True,
                     verbose=False,
@@ -440,6 +442,7 @@ model: auto
                     conf=self.confidence,
                     iou=self.nms_iou,
                     max_det=50,
+                    half=True,
                     verbose=False,
                 )
 

@@ -33,7 +33,7 @@ local_model:
 # 人体检测器配置
 detector:
   model: "yolov8n.pt"            # YOLO 模型文件（自动下载）
-  confidence: 0.05               # 检测置信度阈值（小目标场景宜低，靠 ByteTrack 兜底）
+  confidence: 0.25               # 检测置信度阈值（太低=噪声多，太高=漏检）
   device: "cuda:0"               # 推理设备: cpu 或 cuda:0
   class_ids: [0, 1, 2]           # 要检测的类别 ID 列表，全部当作"人"处理
                                   # 单个值也支持，如: 0（兼容旧配置的 class_id）
