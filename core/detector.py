@@ -53,6 +53,7 @@ class PersonDetector:
         sahi_slice_width: int = 640,
         sahi_slice_height: int = 640,
         sahi_overlap: float = 0.2,
+        half_precision: bool = True,
     ):
         """
         Args:
@@ -77,6 +78,7 @@ class PersonDetector:
             sahi_slice_width: SAHI 切片宽度
             sahi_slice_height: SAHI 切片高度
             sahi_overlap: SAHI 切片重叠比例
+            half_precision: FP16 半精度推理（GPU 加速，CPU 不支持）
         """
         self.confidence = confidence
         self.device = device
@@ -95,6 +97,7 @@ class PersonDetector:
         self.sahi_slice_width = sahi_slice_width
         self.sahi_slice_height = sahi_slice_height
         self.sahi_overlap = sahi_overlap
+        self.half_precision = half_precision and device.startswith("cuda")
         self._sahi_model = None
 
         # 隔帧推理缓存
@@ -321,7 +324,7 @@ model: auto
             conf=self.confidence,
             iou=self.nms_iou,
             max_det=50,
-            half=True,
+            half=self.half_precision,
             verbose=False,
         )
 
@@ -429,7 +432,7 @@ model: auto
                     conf=self.confidence,
                     iou=self.nms_iou,
                     max_det=50,
-                    half=True,
+                    half=self.half_precision,
                     tracker=self.tracker_config,
                     persist=True,
                     verbose=False,
@@ -442,7 +445,7 @@ model: auto
                     conf=self.confidence,
                     iou=self.nms_iou,
                     max_det=50,
-                    half=True,
+                    half=self.half_precision,
                     verbose=False,
                 )
 
