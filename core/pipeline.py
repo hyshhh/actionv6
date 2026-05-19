@@ -289,13 +289,17 @@ class Pipeline:
 
                 # Step 6: 可视化（含检测框持久化）
                 if self.display or self.save_video:
+                    current_bd = frame_analysis.behavior_dicts if frame_analysis else None
+
                     # 合并当前检测 + 持久化的历史检测框
                     if self.bbox_persist_seconds > 0:
                         persist_dets, persist_behaviors = self._get_persisted_detections(detections)
-                        persist_bd = persist_behaviors if persist_behaviors else None
+                        # 合并当前帧行为 + 历史帧行为
+                        all_bd = (current_bd or []) + persist_behaviors
+                        persist_bd = all_bd if all_bd else None
                     else:
                         persist_dets = detections
-                        persist_bd = frame_analysis.behavior_dicts if frame_analysis else None
+                        persist_bd = current_bd
 
                     if self.display:
                         self._render_display(frame, persist_dets, frame_analysis, extra_behaviors=persist_bd)
