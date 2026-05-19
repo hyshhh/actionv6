@@ -133,7 +133,7 @@ output:
 # 流水线配置
 pipeline:
   process_every_n_frames: 30     # 每 N 帧触发一次 API 调用（控制推理频率）
-  buffer_size: 3                 # 历史帧缓冲区大小（仅追踪模式生效，控制 temporal 范围）
+  buffer_size: 1                 # 历史帧缓冲区大小（仅追踪模式生效，控制 temporal 范围）
   max_concurrent: 2              # 最大并发 API 请求数（1=串行，≥2=启用并发线程池）
   alert_cooldown: 5              # 同一行为告警冷却时间（秒）
   display: true                  # 是否显示实时画面（需要 GUI）
@@ -146,6 +146,7 @@ pipeline:
   max_queued_frames: 50          # 并发模式下最大队列帧数（防止内存溢出）
   display_input: false           # 是否显示输入源（摄像头时可选择）（功能4）
   display_output: true           # 是否显示输出画面（标注后的帧）（功能4）
+  bbox_persist_seconds: 1.0      # 检测框在视频中持续显示时间（秒），0=不持续
 
 # 摄像头日志配置
 camera_log:

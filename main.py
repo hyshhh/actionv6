@@ -177,6 +177,8 @@ def build_pipeline(args: argparse.Namespace, config: dict) -> Pipeline:
         # 功能4：显示控制
         display_input=pp_cfg.get("display_input", False),
         display_output=pp_cfg.get("display_output", True),
+        # 检测框持久化
+        bbox_persist_seconds=pp_cfg.get("bbox_persist_seconds", 1.0),
         # 摄像头日志
         camera_log_enabled=config.get("camera_log", {}).get("enabled", True),
         camera_log_retention_hours=config.get("camera_log", {}).get("retention_hours", 2.0),

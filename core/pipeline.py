@@ -76,6 +76,7 @@ class Pipeline:
         display_scale: float = 0.5,
         display_input: bool = False,
         display_output: bool = True,
+        bbox_persist_seconds: float = 1.0,
         camera_log_enabled: bool = True,
         camera_log_retention_hours: float = 2.0,
         camera_log_filename: str = "camera_behavior_log.json",
@@ -101,7 +102,11 @@ class Pipeline:
         self.display_scale = display_scale
         self.display_input = display_input
         self.display_output = display_output
+        self.bbox_persist_seconds = bbox_persist_seconds
         self.alert_callback = alert_callback
+
+        # 检测框持久化缓存：track_id → (bbox, behavior_dict, timestamp)
+        self._bbox_history: dict[int, tuple] = {}
 
         self.tracking_enabled = getattr(detector, 'tracker_enabled', False)
 
@@ -266,6 +271,9 @@ class Pipeline:
                 # Step 5.5: 更新追踪标签缓存（每帧都执行，保证标签持续跟随）
                 self._update_track_labels(frame_analysis, detections)
 
+                # Step 5.6: 更新检测框持久化缓存
+                self._update_bbox_history(detections, frame_analysis)
+
                 # 非 VLM 触发帧：从缓存恢复标签
                 if frame_analysis is None and self.tracking_enabled:
                     cached_dicts = self._get_cached_behavior_dicts(detections)
@@ -279,15 +287,22 @@ class Pipeline:
                             behavior_dicts=cached_dicts,
                         )
 
-                # Step 6: 可视化
-                if self.display:
-                    self._render_display(frame, detections, frame_analysis)
+                # Step 6: 可视化（含检测框持久化）
+                if self.display or self.save_video:
+                    # 合并当前检测 + 持久化的历史检测框
+                    if self.bbox_persist_seconds > 0:
+                        persist_dets, persist_behaviors = self._get_persisted_detections(detections)
+                        persist_bd = persist_behaviors if persist_behaviors else None
+                    else:
+                        persist_dets = detections
+                        persist_bd = frame_analysis.behavior_dicts if frame_analysis else None
 
-                # 视频输出模式：每帧标注后写入视频
-                if self.save_video:
-                    behavior_dicts = frame_analysis.behavior_dicts if frame_analysis else None
-                    annotated = draw_detections(frame, detections, behavior_dicts)
-                    self._write_video_frame(annotated)
+                    if self.display:
+                        self._render_display(frame, persist_dets, frame_analysis, extra_behaviors=persist_bd)
+
+                    if self.save_video:
+                        annotated = draw_detections(frame, persist_dets, persist_bd)
+                        self._write_video_frame(annotated)
 
                 # 记录端到端总耗时
                 self._total_frame_tracker.record(time.time() - frame_start_time)
@@ -806,6 +821,62 @@ class Pipeline:
                 result.append(self._track_labels[d.track_id])
         return result if result else None
 
+    def _update_bbox_history(
+        self,
+        detections: list[PersonDetection],
+        frame_analysis: Optional[FrameAnalysis],
+    ):
+        """更新检测框持久化缓存"""
+        now = time.time()
+
+        # 添加当前帧的检测框
+        behavior_lookup = {}
+        if frame_analysis and frame_analysis.behavior_dicts:
+            for bd in frame_analysis.behavior_dicts:
+                pk = bd.get("person_key")
+                if pk is not None:
+                    behavior_lookup[pk] = bd
+
+        for det in detections:
+            tid = det.track_id
+            if tid is None:
+                continue
+            bd = behavior_lookup.get(tid)
+            self._bbox_history[tid] = (det.bbox, bd, now)
+
+        # 清除过期的检测框
+        if self.bbox_persist_seconds > 0:
+            expired = [
+                tid for tid, (_, _, ts) in self._bbox_history.items()
+                if now - ts > self.bbox_persist_seconds
+            ]
+            for tid in expired:
+                del self._bbox_history[tid]
+
+    def _get_persisted_detections(
+        self,
+        current_detections: list[PersonDetection],
+    ) -> tuple[list, list[dict]]:
+        """获取当前检测 + 持久化的历史检测框"""
+        now = time.time()
+        result_dets = list(current_detections)
+        result_behaviors = []
+        current_tids = {d.track_id for d in current_detections if d.track_id is not None}
+
+        for tid, (bbox, bd, ts) in self._bbox_history.items():
+            if tid in current_tids:
+                continue  # 当前帧已有，不重复
+            if now - ts > self.bbox_persist_seconds:
+                continue  # 已过期
+            # 创建虚拟检测对象用于绘制
+            result_dets.append(PersonDetection(
+                frame_index=0, timestamp=ts, bbox=bbox, track_id=tid,
+            ))
+            if bd:
+                result_behaviors.append(bd)
+
+        return result_dets, result_behaviors
+
     # ==================================================================
     # 可视化与显示
     # ==================================================================
@@ -815,6 +886,7 @@ class Pipeline:
         frame: np.ndarray,
         detections: list[PersonDetection],
         analysis: Optional[FrameAnalysis] = None,
+        extra_behaviors: list[dict] | None = None,
     ):
         """渲染显示画面"""
         show_input = self.display_input
@@ -827,7 +899,7 @@ class Pipeline:
             return
 
         if show_output:
-            annotated = self._draw_frame(frame, detections, analysis)
+            annotated = self._draw_frame(frame, detections, analysis, extra_behaviors)
         else:
             annotated = None
 
@@ -878,11 +950,19 @@ class Pipeline:
         frame: np.ndarray,
         detections: list[PersonDetection],
         analysis: Optional[FrameAnalysis] = None,
+        extra_behaviors: list[dict] | None = None,
     ) -> np.ndarray:
         """绘制带检测框和行为标签的帧"""
         behavior_dicts = None
         if analysis and analysis.behavior_dicts:
             behavior_dicts = analysis.behavior_dicts
+
+        # 合并当前帧和持久化的行为标签
+        if extra_behaviors:
+            if behavior_dicts:
+                behavior_dicts = behavior_dicts + extra_behaviors
+            else:
+                behavior_dicts = extra_behaviors
 
         annotated = draw_detections(frame, detections, behavior_dicts)
 
