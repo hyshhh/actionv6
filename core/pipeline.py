@@ -294,8 +294,15 @@ class Pipeline:
                     # 合并当前检测 + 持久化的历史检测框
                     if self.bbox_persist_seconds > 0:
                         persist_dets, persist_behaviors = self._get_persisted_detections(detections)
-                        # 合并当前帧行为 + 历史帧行为
-                        all_bd = (current_bd or []) + persist_behaviors
+                        # VLM 结果优先，仅补充没有当前结果的 track_id
+                        current_keys = set()
+                        if current_bd:
+                            for bd in current_bd:
+                                pk = bd.get("person_key")
+                                if pk is not None:
+                                    current_keys.add(pk)
+                        extra = [b for b in persist_behaviors if b.get("person_key") not in current_keys]
+                        all_bd = (current_bd or []) + extra
                         persist_bd = all_bd if all_bd else None
                     else:
                         persist_dets = detections
@@ -833,7 +840,7 @@ class Pipeline:
         """更新检测框持久化缓存"""
         now = time.time()
 
-        # 添加当前帧的检测框
+        # 从 VLM 结果或追踪缓存中获取行为信息
         behavior_lookup = {}
         if frame_analysis and frame_analysis.behavior_dicts:
             for bd in frame_analysis.behavior_dicts:
@@ -845,7 +852,10 @@ class Pipeline:
             tid = det.track_id
             if tid is None:
                 continue
+            # 优先用 VLM 结果，其次用追踪缓存（非 VLM 帧也能拿到行为标签）
             bd = behavior_lookup.get(tid)
+            if bd is None and tid in self._track_labels:
+                bd = self._track_labels[tid]
             self._bbox_history[tid] = (det.bbox, bd, now)
 
         # 清除过期的检测框
