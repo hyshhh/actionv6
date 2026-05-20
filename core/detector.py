@@ -140,11 +140,27 @@ class PersonDetector:
             return
         try:
             from sahi import AutoDetectionModel
+
+            # 获取模型文件路径：优先用 YOLO 内部路径，其次用构造时的 model_path
+            model_path = getattr(self.model, 'model_path', None) or getattr(self.model, 'ckpt_path', None)
+            if model_path is None:
+                # 回退：从 YOLO 模型名推断（ultralytics 会自动下载到默认缓存）
+                model_path = self.model.model_name if hasattr(self.model, 'model_name') else str(self.model)
+
+            # 验证 CUDA 设备可用性
+            import torch
+            device = self.device
+            if device.startswith("cuda"):
+                gpu_id = int(device.split(":")[-1]) if ":" in device else 0
+                if gpu_id >= torch.cuda.device_count():
+                    logger.warning(f"CUDA 设备 {device} 不存在（共 {torch.cuda.device_count()} 张 GPU），回退到 cuda:0")
+                    device = "cuda:0"
+
             self._sahi_model = AutoDetectionModel.from_pretrained(
                 model_type="ultralytics",
-                model_path=self.model.model_name if hasattr(self.model, 'model_name') else str(self.model),
+                model_path=str(model_path),
                 confidence_threshold=self.confidence,
-                device=self.device,
+                device=device,
             )
             logger.info("SAHI 模型初始化完成")
         except ImportError:
